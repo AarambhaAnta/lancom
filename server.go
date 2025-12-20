@@ -6,6 +6,26 @@ import (
 	"net"
 )
 
+func handleClient(conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	for {
+		msg, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("server: client disconnected")
+			return
+		}
+
+		fmt.Println("server got: ", msg)
+
+		_, err = conn.Write([]byte("ok\n"))
+		if err != nil {
+			return
+		}
+	}
+}
+
 func main() {
 	ln, err := net.Listen("tcp", "127.0.0.1:9000")
 	if err != nil {
@@ -16,31 +36,18 @@ func main() {
 
 	fmt.Println("server: listening...")
 
-	conn, err := ln.Accept()
-	if err != nil {
-		fmt.Println("server: failed to reconnect")
-		panic(err)
-	}
-	defer conn.Close()
-
-	fmt.Println("server: client connected...")
-
-	// read->print->write
-	reader := bufio.NewReader(conn)
-
 	for {
-		msg, err := reader.ReadString('\n')
+		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Println("server: failed to read")
-			return
+			fmt.Println("server: accept error->", err)
+			continue
 		}
 
-		fmt.Println("server got: ", msg)
+		fmt.Println("server: client connected...")
+		go func() {
+			handleClient(conn)
+		}()
 
-		_, err = conn.Write([]byte("ok\n"))
-		if err != nil {
-			fmt.Println("server: failed to write")
-			return
-		}
 	}
+
 }
