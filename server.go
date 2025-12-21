@@ -52,23 +52,24 @@ func main() {
 
 	fmt.Println("server: listening on 127.0.0.1:9000")
 
-	// Accept a single connection
-	conn, err := ln.Accept()
-	if err != nil {
-		fmt.Println("server: accept error:", err)
-		return
+	// Accept clients in a loop
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			fmt.Println("server: accept error:", err)
+			continue // Keep accepting other clients
+		}
+
+		// Create a client from the connection
+		client := &Client{
+			conn:   conn,
+			reader: bufio.NewReader(conn),
+			writer: bufio.NewWriter(conn),
+		}
+
+		fmt.Println("server: client connected from", client.conn.RemoteAddr())
+
+		// Handle the client in a goroutine
+		go handleClient(client)
 	}
-
-	// Create a client from the connection
-	client := &Client{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-	}
-	defer client.conn.Close()
-
-	fmt.Println("server: client connected from,", client.conn.RemoteAddr())
-
-	// Handle the client
-	handleClient(client)
 }
