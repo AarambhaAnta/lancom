@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"time"
@@ -17,15 +18,25 @@ func main() {
 
 	fmt.Println("client: connected to server")
 
-	// Send a message
-	message := "Hello from client!\n"
-	_, err = conn.Write([]byte(message))
-	if err != nil {
-		fmt.Println("client: write error:", err)
-		return
-	}
+	// Create a buffered writer
+	writer := bufio.NewWriter(conn)
 
-	fmt.Println("client: sent message:", message)
+	// Send a few message
+	messages := []string{
+		"Hello from client!\n",
+		"This is line 2\n",
+		"And line 3\n",
+	}
+	for _, msg := range messages {
+		_, err = writer.WriteString(msg)
+		if err != nil {
+			fmt.Println("client: write error:", err)
+			return
+		}
+		writer.Flush() //! Important: flush the buffer to send data
+		fmt.Println("client: sent: ", msg)
+		time.Sleep(2 * time.Second) // Pause between messages
+	}
 
 	// Keep connection open for a bit
 	time.Sleep(2 * time.Second)

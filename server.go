@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 )
@@ -26,16 +27,17 @@ func main() {
 
 	fmt.Println("server: client connected from,", conn.RemoteAddr())
 
-	// Read data in a loop
-	buf := make([]byte, 1024)
+	// Create a buffered reader
+	reader := bufio.NewReader(conn)
+
+	// Read lines in a loop
 	for {
-		n, err := conn.Read(buf)
+		message, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Println("server: read error:", err)
 			return
 		}
 
-		message := string(buf[:n])
-		fmt.Printf("server: received %d bytes: %s", n, message)
+		fmt.Println("server: received: ", message)
 	}
 }
