@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"sync"
 )
 
 // Client represents a connected chat client
@@ -14,32 +15,40 @@ type Client struct {
 	writer *bufio.Writer
 }
 
+// Map to track all connected clients
+var (
+	clients = make(map[*Client]bool)
+	mu      sync.Mutex
+)
+
 func handleClient(client *Client) {
+	defer func() {
+		// Clean up when client disconnects
+		mu.Lock()
+		delete(clients, client)
+		mu.Unlock()
+
+		fmt.Println("server: client disconnected:", client.conn.RemoteAddr())
+		client.conn.Close()
+	}()
+
 	// Read lines and echo them back
 	for {
 		message, err := client.reader.ReadString('\n')
 		if err != nil {
-			fmt.Println("server: read error:", err)
-			return
+			return // Exit and trigger the deferred cleanup
 		}
 
-		fmt.Println("server: received: ", message)
+		fmt.Printf("server: received from %s: %s", client.conn.RemoteAddr(), message)
 
-		// Echo the message back
+		// Just echo for now, we'll implement broadcast next
 		_, err = client.writer.WriteString("Echo: " + message)
 		if err != nil {
-			fmt.Println("server: write error:", err)
 			return
 		}
 
-		// Message flush!
-		err = client.writer.Flush()
-		if err != nil {
-			fmt.Println("server: flush error:", err)
-			return
-		}
+		client.writer.Flush()
 	}
-
 }
 
 func main() {
@@ -57,7 +66,7 @@ func main() {
 		conn, err := ln.Accept()
 		if err != nil {
 			fmt.Println("server: accept error:", err)
-			continue // Keep accepting other clients
+			continue
 		}
 
 		// Create a client from the connection
@@ -67,9 +76,14 @@ func main() {
 			writer: bufio.NewWriter(conn),
 		}
 
-		fmt.Println("server: client connected from", client.conn.RemoteAddr())
+		// Add client to tracking map
+		mu.Lock()
+		clients[client] = true
+		mu.Unlock()
 
-		// Handle the client in a goroutine
+		fmt.Println("server: client connected from", client.conn.RemoteAddr())
+		fmt.Printf("server: %d clients connected\n", len(clients))
+
 		go handleClient(client)
 	}
 }
