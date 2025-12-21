@@ -5,7 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"time"
+	"os"
 )
 
 func main() {
@@ -19,38 +19,38 @@ func main() {
 	fmt.Println("client: connected to server")
 
 	// Create readers and writers
-	reader := bufio.NewReader(conn)
-	writer := bufio.NewWriter(conn)
+	connReader := bufio.NewReader(conn)
+	connWriter := bufio.NewWriter(conn)
+	stdinReader := bufio.NewReader(os.Stdin)
 
-	// Send a few message and read response
-	messages := []string{
-		"Hello from client!\n",
-		"This is line 2\n",
-		"And line 3\n",
-	}
-	
-	for _, msg := range messages {
-		// Send message
-		_, err = writer.WriteString(msg)
-		if err != nil {
-			fmt.Println("client: write error:", err)
-			return
+	// Start a goroutine to read messages from the server
+	go func() {
+		for {
+			response, err := connReader.ReadString('\n')
+			if err != nil {
+				fmt.Println("\nclient: server disconnected")
+				os.Exit(0)
+				return
+			}
+			fmt.Print("\r↓ ", response, "> ")
 		}
-		writer.Flush()
-		fmt.Println("client: sent:", msg)
+	}()
 
-		// Read response
-		response, err := reader.ReadString('\n')
+	// Main loop to read from stdin and send to server
+	for {
+		fmt.Print("> ")
+		message, err := stdinReader.ReadString('\n')
 		if err != nil {
 			fmt.Println("client: read error:", err)
 			return
 		}
-		fmt.Println("client: received: ", response)
 
-		// Pause between messages
-		time.Sleep(1 * time.Second)
+		// Send to server
+		_, err = connWriter.WriteString(message)
+		if err != nil {
+			fmt.Println("client: write error:", err)
+			return
+		}
+		connWriter.Flush()
 	}
-
-	// Keep connection open for a bit
-	time.Sleep(2 * time.Second)
 }

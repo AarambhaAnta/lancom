@@ -21,6 +21,27 @@ var (
 	mu      sync.Mutex
 )
 
+// Broadcast a message to all clients except the sender
+func broadcast(sender *Client, message string) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	for client := range clients {
+		// Skip the sender
+		if client == sender {
+			continue
+		}
+
+		_, err := client.writer.WriteString(message)
+		if err != nil {
+			// If we can't write to a client, assume it's disconnected
+			// We'll remove it next time it tries to read/writes
+			continue
+		}
+		client.writer.Flush()
+	}
+}
+
 func handleClient(client *Client) {
 	defer func() {
 		// Clean up when client disconnects
@@ -32,21 +53,24 @@ func handleClient(client *Client) {
 		client.conn.Close()
 	}()
 
-	// Read lines and echo them back
+	// Read lines and broadcast them
 	for {
 		message, err := client.reader.ReadString('\n')
 		if err != nil {
 			return // Exit and trigger the deferred cleanup
 		}
 
-		fmt.Printf("server: received from %s: %s", client.conn.RemoteAddr(), message)
+		clientAddr := client.conn.RemoteAddr().String()
+		fmt.Printf("server: received from %s: %s", clientAddr, message)
 
-		// Just echo for now, we'll implement broadcast next
-		_, err = client.writer.WriteString("Echo: " + message)
-		if err != nil {
-			return
-		}
+		// Format the broadcast message with the sender's address
+		broadcastMsg := fmt.Sprintf("From %s: %s", clientAddr, message)
 
+		// Broadcast to all other clients
+		broadcast(client, broadcastMsg)
+
+		// Also send a confirmation to the sender
+		client.writer.WriteString("Message sent to all clients\n")
 		client.writer.Flush()
 	}
 }
