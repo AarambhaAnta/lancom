@@ -41,7 +41,7 @@ func main() {
 
 	fmt.Println("server: client connected from,", client.conn.RemoteAddr())
 
-	// Read lines in a loop
+	// Read lines and echo them back
 	for {
 		message, err := client.reader.ReadString('\n')
 		if err != nil {
@@ -50,5 +50,19 @@ func main() {
 		}
 
 		fmt.Println("server: received: ", message)
+
+		// Echo the message back
+		_, err = client.writer.WriteString("Echo: " + message)
+		if err != nil {
+			fmt.Println("server: write err:", err)
+			return
+		}
+
+		// Message flush!
+		err = client.writer.Flush()
+		if err != nil {
+			fmt.Println("server: flush error:", err)
+			return
+		}
 	}
 }
