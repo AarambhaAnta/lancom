@@ -26,6 +26,16 @@ func main() {
 
 	fmt.Println("server: client connected from,", conn.RemoteAddr())
 
-	// Block forever to keep connection alive
-	select {}
+	// Read data in a loop
+	buf := make([]byte, 1024)
+	for {
+		n, err := conn.Read(buf)
+		if err != nil {
+			fmt.Println("server: read error:", err)
+			return
+		}
+
+		message := string(buf[:n])
+		fmt.Printf("server: received %d bytes: %s", n, message)
+	}
 }
