@@ -14,6 +14,34 @@ type Client struct {
 	writer *bufio.Writer
 }
 
+func handleClient(client *Client) {
+	// Read lines and echo them back
+	for {
+		message, err := client.reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("server: read error:", err)
+			return
+		}
+
+		fmt.Println("server: received: ", message)
+
+		// Echo the message back
+		_, err = client.writer.WriteString("Echo: " + message)
+		if err != nil {
+			fmt.Println("server: write error:", err)
+			return
+		}
+
+		// Message flush!
+		err = client.writer.Flush()
+		if err != nil {
+			fmt.Println("server: flush error:", err)
+			return
+		}
+	}
+
+}
+
 func main() {
 	ln, err := net.Listen("tcp", "127.0.0.1:9000")
 	if err != nil {
@@ -41,28 +69,6 @@ func main() {
 
 	fmt.Println("server: client connected from,", client.conn.RemoteAddr())
 
-	// Read lines and echo them back
-	for {
-		message, err := client.reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("server: read error:", err)
-			return
-		}
-
-		fmt.Println("server: received: ", message)
-
-		// Echo the message back
-		_, err = client.writer.WriteString("Echo: " + message)
-		if err != nil {
-			fmt.Println("server: write err:", err)
-			return
-		}
-
-		// Message flush!
-		err = client.writer.Flush()
-		if err != nil {
-			fmt.Println("server: flush error:", err)
-			return
-		}
-	}
+	// Handle the client
+	handleClient(client)
 }
