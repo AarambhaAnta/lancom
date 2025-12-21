@@ -7,6 +7,13 @@ import (
 	"net"
 )
 
+// Client represents a connected chat client
+type Client struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
+}
+
 func main() {
 	ln, err := net.Listen("tcp", "127.0.0.1:9000")
 	if err != nil {
@@ -23,16 +30,20 @@ func main() {
 		fmt.Println("server: accept error:", err)
 		return
 	}
-	defer conn.Close()
 
-	fmt.Println("server: client connected from,", conn.RemoteAddr())
+	// Create a client from the connection
+	client := &Client{
+		conn:   conn,
+		reader: bufio.NewReader(conn),
+		writer: bufio.NewWriter(conn),
+	}
+	defer client.conn.Close()
 
-	// Create a buffered reader
-	reader := bufio.NewReader(conn)
+	fmt.Println("server: client connected from,", client.conn.RemoteAddr())
 
 	// Read lines in a loop
 	for {
-		message, err := reader.ReadString('\n')
+		message, err := client.reader.ReadString('\n')
 		if err != nil {
 			fmt.Println("server: read error:", err)
 			return
