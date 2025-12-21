@@ -16,6 +16,16 @@ func main() {
 
 	fmt.Println("server: listening on 127.0.0.1:9000")
 
-	// Block forever to keep server running
+	// Accept a single connection
+	conn, err := ln.Accept()
+	if err != nil {
+		fmt.Println("server: accept error:", err)
+		return
+	}
+	defer conn.Close()
+
+	fmt.Println("server: client connected from,", conn.RemoteAddr())
+
+	// Block forever to keep connection alive
 	select {}
 }
