@@ -4,8 +4,10 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"lancom/protocol"
 	"net"
 	"sync"
+	"sync/atomic"
 )
 
 // Client represents a connected chat client
@@ -13,16 +15,25 @@ type Client struct {
 	conn   net.Conn
 	reader *bufio.Reader
 	writer *bufio.Writer
+	id     string
 }
 
 // Map to track all connected clients
 var (
-	clients = make(map[*Client]bool)
-	mu      sync.Mutex
+	clients         = make(map[*Client]bool)
+	mu              sync.Mutex
+	clientIDCounter uint64 // atomic counter for sequential IDs
 )
 
+// getNextClientID generates a sequential, unique client ID
+// Uses atomic operations to ensure thread-safety and no duplicates
+func getNextClientID() string {
+	id := atomic.AddUint64(&clientIDCounter, 1)
+	return fmt.Sprintf("client-%d", id)
+}
+
 // Broadcast a message to all clients except the sender
-func broadcast(sender *Client, message string) {
+func broadcast(sender *Client, message *protocol.Message) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -32,7 +43,12 @@ func broadcast(sender *Client, message string) {
 			continue
 		}
 
-		_, err := client.writer.WriteString(message)
+		msgJson, err := protocol.Encode(message)
+		if err != nil {
+			fmt.Println("server: failed to parse Message object:", err)
+		}
+
+		_, err = client.writer.WriteString(string(msgJson) + "\n")
 		if err != nil {
 			// If we can't write to a client, assume it's disconnected
 			// We'll remove it next time it tries to read/writes
@@ -60,17 +76,28 @@ func handleClient(client *Client) {
 			return // Exit and trigger the deferred cleanup
 		}
 
-		clientAddr := client.conn.RemoteAddr().String()
-		fmt.Printf("server: received from %s: %s", clientAddr, message)
-
-		// Format the broadcast message with the sender's address
-		broadcastMsg := fmt.Sprintf("From %s: %s", clientAddr, message)
+		// Prepare Message object from received json
+		msgObj, err := protocol.Decode([]byte(message))
+		if err != nil {
+			fmt.Println("server: decode error:", err)
+		}
 
 		// Broadcast to all other clients
-		broadcast(client, broadcastMsg)
+		broadcast(client, msgObj)
 
 		// Also send a confirmation to the sender
-		client.writer.WriteString("Message sent to all clients\n")
+		msgAck := protocol.Message{
+			Type: protocol.TypeChatAck,
+			From: "server",
+			To:   "client",
+			Body: "Message sent to all clients",
+		}
+
+		data, err := protocol.Encode(&msgAck)
+		if err != nil {
+			fmt.Println("server: encode error: ", err)
+		}
+		client.writer.WriteString(string(data) + "\n")
 		client.writer.Flush()
 	}
 }
@@ -98,6 +125,7 @@ func main() {
 			conn:   conn,
 			reader: bufio.NewReader(conn),
 			writer: bufio.NewWriter(conn),
+			id:     getNextClientID(),
 		}
 
 		// Add client to tracking map
@@ -105,7 +133,7 @@ func main() {
 		clients[client] = true
 		mu.Unlock()
 
-		fmt.Println("server: client connected from", client.conn.RemoteAddr())
+		fmt.Printf("server: client connected from %s (ID: %s)\n", client.conn.RemoteAddr(), client.id)
 		fmt.Printf("server: %d clients connected\n", len(clients))
 
 		go handleClient(client)
