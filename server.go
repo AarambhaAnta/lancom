@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"lancom/protocol"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -32,8 +33,22 @@ func getNextClientID() string {
 	return fmt.Sprintf("client-%d", id)
 }
 
-// Broadcast a message to all clients except the sender
-func broadcast(sender *Client, message *protocol.Message) {
+// msgWriter: writes message to the connection
+func msgWriter(msg *protocol.Message, client *Client) error {
+	data, err := protocol.Encode(msg)
+	if err != nil {
+		return err
+	}
+	_, err = client.writer.WriteString(string(data) + "\n")
+	if err != nil {
+		return err
+	}
+	client.writer.Flush()
+	return nil
+}
+
+// Broadcaster: broadcast a message to all clients except the sender
+func broadcaster(msg *protocol.Message, sender *Client) {
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -42,23 +57,78 @@ func broadcast(sender *Client, message *protocol.Message) {
 		if client == sender {
 			continue
 		}
-
-		msgJson, err := protocol.Encode(message)
+		err := msgWriter(msg, client)
 		if err != nil {
-			fmt.Println("server: failed to parse Message object:", err)
-		}
-
-		_, err = client.writer.WriteString(string(msgJson) + "\n")
-		if err != nil {
-			// If we can't write to a client, assume it's disconnected
-			// We'll remove it next time it tries to read/writes
 			continue
 		}
-		client.writer.Flush()
 	}
 }
 
-func handleClient(client *Client) {
+// Join handler: handles what to do on join
+func joinHandler(client *Client) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	client.id = getNextClientID()
+	msg := protocol.Message{
+		Type: protocol.TypeJoinAck,
+		From: "server",
+		To:   "client",
+		Body: client.id,
+	}
+
+	err := msgWriter(&msg, client)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// Chat handler: handles what do on chat request
+func chatHandler(msg *protocol.Message, client *Client) error {
+	broadcaster(msg, client)
+	msgAck := protocol.Message{
+		Type: protocol.TypeChatAck,
+		From: "server",
+		To:   client.id,
+		Body: "Message sent to all...",
+	}
+
+	err := msgWriter(&msgAck, client)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Leave handler: handles gracefull shutdown or delete of client on leave
+func leaveHandler(client *Client) error { return nil }
+
+// Message handler: decides what to do for different types of message
+func messageHandler(msg *string, client *Client) error {
+	msgObj, err := protocol.Decode([]byte(*msg))
+	if err != nil {
+		return err
+	}
+	err = msgObj.Validate()
+	if err != nil {
+		return err
+	}
+	switch msgObj.Type {
+	case protocol.TypeJoin:
+		return joinHandler(client)
+	case protocol.TypeChat:
+		return chatHandler(msgObj, client)
+	case protocol.TypeLeave:
+		return leaveHandler(client)
+	}
+	return nil
+}
+
+// Handles all the functionality for a client like reading and writing
+// Handles all the message types like `join`, `chat`...
+func clientHandler(client *Client) {
 	defer func() {
 		// Clean up when client disconnects
 		mu.Lock()
@@ -71,37 +141,21 @@ func handleClient(client *Client) {
 
 	// Read lines and broadcast them
 	for {
-		message, err := client.reader.ReadString('\n')
+		msg, err := client.reader.ReadString('\n')
 		if err != nil {
 			return // Exit and trigger the deferred cleanup
 		}
 
-		// Prepare Message object from received json
-		msgObj, err := protocol.Decode([]byte(message))
+		msg = strings.TrimSuffix(msg, "\n")
+
+		err = messageHandler(&msg, client)
 		if err != nil {
-			fmt.Println("server: decode error:", err)
+			fmt.Println("Message: error in handling message:", err)
 		}
-
-		// Broadcast to all other clients
-		broadcast(client, msgObj)
-
-		// Also send a confirmation to the sender
-		msgAck := protocol.Message{
-			Type: protocol.TypeChatAck,
-			From: "server",
-			To:   "client",
-			Body: "Message sent to all clients",
-		}
-
-		data, err := protocol.Encode(&msgAck)
-		if err != nil {
-			fmt.Println("server: encode error: ", err)
-		}
-		client.writer.WriteString(string(data) + "\n")
-		client.writer.Flush()
 	}
 }
 
+// Main entry for the client-to-server connection
 func main() {
 	ln, err := net.Listen("tcp", "127.0.0.1:9000")
 	if err != nil {
@@ -125,7 +179,6 @@ func main() {
 			conn:   conn,
 			reader: bufio.NewReader(conn),
 			writer: bufio.NewWriter(conn),
-			id:     getNextClientID(),
 		}
 
 		// Add client to tracking map
@@ -133,9 +186,9 @@ func main() {
 		clients[client] = true
 		mu.Unlock()
 
-		fmt.Printf("server: client connected from %s (ID: %s)\n", client.conn.RemoteAddr(), client.id)
-		fmt.Printf("server: %d clients connected\n", len(clients))
+		fmt.Println("[clients: %d]", len(clients))
+		fmt.Println("server: found another client: ", client.conn.RemoteAddr())
 
-		go handleClient(client)
+		go clientHandler(client)
 	}
 }
