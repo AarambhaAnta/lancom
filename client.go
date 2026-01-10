@@ -23,6 +23,7 @@ func show(m *protocol.Message) {
 
 // msgWriter: writes message to the connection
 func messageWriter(m *protocol.Message) error {
+	m.Version = protocol.Version
 	data, err := protocol.Encode(m)
 	if err != nil {
 		return err
@@ -119,7 +120,7 @@ func main() {
 
 		// Build Message object -> json -> send to server
 		message := protocol.Message{
-			Type: "chat",
+			Type: protocol.TypeChat,
 			From: myId,
 			To:   "server",
 			Body: msg,

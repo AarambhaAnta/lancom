@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"lancom/protocol"
 	"net"
@@ -11,20 +12,21 @@ import (
 	"sync/atomic"
 )
 
-// Client represents a connected chat client
-type Client struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	writer *bufio.Writer
-	id     string
-}
-
 // Map to track all connected clients
 var (
 	clients         = make(map[*Client]bool)
 	mu              sync.Mutex
 	clientIDCounter uint64 // atomic counter for sequential IDs
 )
+
+// Client represents a connected chat client
+type Client struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	writer *bufio.Writer
+	id     string
+	joined bool
+}
 
 // getNextClientID generates a sequential, unique client ID
 // Uses atomic operations to ensure thread-safety and no duplicates
@@ -34,8 +36,9 @@ func getNextClientID() string {
 }
 
 // msgWriter: writes message to the connection
-func msgWriter(msg *protocol.Message, client *Client) error {
-	data, err := protocol.Encode(msg)
+func msgWriter(m *protocol.Message, client *Client) error {
+	m.Version = protocol.Version
+	data, err := protocol.Encode(m)
 	if err != nil {
 		return err
 	}
@@ -67,29 +70,32 @@ func broadcaster(msg *protocol.Message, sender *Client) {
 // Join handler: handles what to do on join
 func joinHandler(client *Client) error {
 	mu.Lock()
-	defer mu.Unlock()
 
+	if client.joined {
+		return fmt.Errorf("Client already joined")
+	}
+	clients[client] = true
 	client.id = getNextClientID()
+	client.joined = true
+	mu.Unlock()
+
 	msg := protocol.Message{
 		Type: protocol.TypeJoinAck,
-		From: "server",
+		From: protocol.Server,
 		To:   "client",
 		Body: client.id,
 	}
 
-	err := msgWriter(&msg, client)
-	if err != nil {
-		return err
-	}
-	return nil
+	return msgWriter(&msg, client)
 }
 
 // Chat handler: handles what do on chat request
 func chatHandler(msg *protocol.Message, client *Client) error {
+	msg.From = client.id
 	broadcaster(msg, client)
 	msgAck := protocol.Message{
 		Type: protocol.TypeChatAck,
-		From: "server",
+		From: protocol.Server,
 		To:   client.id,
 		Body: "Message sent to all...",
 	}
@@ -103,7 +109,28 @@ func chatHandler(msg *protocol.Message, client *Client) error {
 }
 
 // Leave handler: handles gracefull shutdown or delete of client on leave
-func leaveHandler(client *Client) error { return nil }
+func leaveHandler(client *Client) error {
+	mu.Lock()
+	if client.joined {
+		delete(clients, client)
+		client.joined = false
+	}
+	mu.Unlock()
+
+	client.conn.Close()
+	return nil
+}
+
+// Sementic Validator: server side validator
+func semanticValidator(m *protocol.Message, client *Client) error {
+	if m.Type == protocol.TypeJoinAck {
+		return fmt.Errorf("clients can't send %s (join accknowledgements)", protocol.TypeJoinAck)
+	}
+	if m.Type == protocol.TypeLeave && !client.joined {
+		return fmt.Errorf("client (%s) is not joined", client.id)
+	}
+	return nil
+}
 
 // Message handler: decides what to do for different types of message
 func messageHandler(msg *string, client *Client) error {
@@ -112,6 +139,15 @@ func messageHandler(msg *string, client *Client) error {
 		return err
 	}
 	err = msgObj.Validate()
+	if err != nil {
+		return err
+	}
+
+	if !client.joined && msgObj.Type != protocol.TypeJoin {
+		return errors.New("client must join first")
+	}
+
+	err = semanticValidator(msgObj, client)
 	if err != nil {
 		return err
 	}
@@ -129,15 +165,7 @@ func messageHandler(msg *string, client *Client) error {
 // Handles all the functionality for a client like reading and writing
 // Handles all the message types like `join`, `chat`...
 func clientHandler(client *Client) {
-	defer func() {
-		// Clean up when client disconnects
-		mu.Lock()
-		delete(clients, client)
-		mu.Unlock()
-
-		fmt.Println("server: client disconnected:", client.conn.RemoteAddr())
-		client.conn.Close()
-	}()
+	defer leaveHandler(client)
 
 	// Read lines and broadcast them
 	for {
@@ -180,14 +208,6 @@ func main() {
 			reader: bufio.NewReader(conn),
 			writer: bufio.NewWriter(conn),
 		}
-
-		// Add client to tracking map
-		mu.Lock()
-		clients[client] = true
-		mu.Unlock()
-
-		fmt.Println("[clients: %d]", len(clients))
-		fmt.Println("server: found another client: ", client.conn.RemoteAddr())
 
 		go clientHandler(client)
 	}

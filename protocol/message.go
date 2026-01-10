@@ -12,15 +12,18 @@ const (
 	TypeChat    = "chat"
 	TypeChatAck = "chat_ack"
 	TypeLeave   = "leave"
+	Server      = "server"
+	Version     = "1.0"
 )
 
 // Protocol knows JSON
 // Transport knows `\n`
 type Message struct {
-	Type string `json:"type"`
-	From string `json:"from"`
-	To   string `json:"to"`
-	Body string `json:"body"`
+	Version string `json:"version"`
+	Type    string `json:"type"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Body    string `json:"body"`
 }
 
 // JSON to Message
@@ -44,6 +47,10 @@ func Encode(m *Message) ([]byte, error) {
 
 // Validation after decode []byte -> Message{}
 func (m *Message) Validate() error {
+	if m.Version != Version {
+		return fmt.Errorf("unsupported version")
+	}
+
 	switch m.Type {
 	case TypeJoin:
 		if m.Body != "" {
