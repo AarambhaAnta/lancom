@@ -91,7 +91,6 @@ func joinHandler(client *Client) error {
 
 // Chat handler: handles what do on chat request
 func chatHandler(msg *protocol.Message, client *Client) error {
-	msg.From = client.id
 	broadcaster(msg, client)
 	msgAck := protocol.Message{
 		Type: protocol.TypeChatAck,
@@ -156,6 +155,9 @@ func messageHandler(msg *string, client *Client) error {
 	if err != nil {
 		return err
 	}
+
+	msgObj.From = client.id
+
 	switch msgObj.Type {
 	case protocol.TypeJoin:
 		return joinHandler(client)
