@@ -124,12 +124,16 @@ func leaveHandler(client *Client) error {
 
 // Sementic Validator: server side validator
 func semanticValidator(m *protocol.Message, client *Client) error {
+	if m.Type == protocol.TypeJoinAck && m.From != protocol.Server {
+		return fmt.Errorf("acknowledgement can only be sent by server")
+	}
 	if m.Type == protocol.TypeJoinAck {
-		return fmt.Errorf("clients can't send %s (join accknowledgements)", protocol.TypeJoinAck)
+		return fmt.Errorf("client can't sent %s (join acknowledgements)", protocol.TypeJoinAck)
 	}
 	if m.Type == protocol.TypeLeave && !client.joined {
 		return fmt.Errorf("client (%s) is not joined", client.id)
 	}
+	
 	return nil
 }
 

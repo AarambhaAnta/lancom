@@ -3,7 +3,6 @@ package protocol
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 )
 
 const (
@@ -12,6 +11,7 @@ const (
 	TypeChat    = "chat"
 	TypeChatAck = "chat_ack"
 	TypeLeave   = "leave"
+	TypeError   = "error"
 	Server      = "server"
 	Version     = "1.0"
 )
@@ -48,30 +48,10 @@ func Encode(m *Message) ([]byte, error) {
 // Validation after decode []byte -> Message{}
 func (m *Message) Validate() error {
 	if m.Version != Version {
-		return fmt.Errorf("unsupported version")
+		return errors.New("unsupported version")
 	}
-
-	switch m.Type {
-	case TypeJoin:
-		if m.Body != "" {
-			return fmt.Errorf("invalid message body for type %s", TypeJoin)
-		}
-	case TypeJoinAck:
-		if m.Body == "" {
-			return fmt.Errorf("invalid message body for type acknowledgement %s", TypeJoinAck)
-		}
-	case TypeChat:
-		if m.Body == "" {
-			return fmt.Errorf("invalid message body for type %s", TypeChat)
-		}
-	case TypeChatAck:
-		if m.Body == "" {
-			return fmt.Errorf("invalid message body for chat acknowledgement %s", TypeChatAck)
-		}
-	case TypeLeave:
-		return nil
-	default:
-		return errors.New("invalid message type")
+	if m.Type == "" {
+		return errors.New("message type cannot be empty")
 	}
 	return nil
 }
