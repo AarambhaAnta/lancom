@@ -179,7 +179,14 @@ func clientHandler(client *Client) {
 
 		err = messageHandler(&msg, client)
 		if err != nil {
-			fmt.Println("Message: error in handling message:", err)
+			fmt.Println("error processing message from %s: %v\n", client.id, err)
+			errMsg := protocol.Message{
+				Type: protocol.TypeError,
+				From: protocol.Server,
+				To:   client.id,
+				Body: string(err.Error()),
+			}
+			msgWriter(&errMsg, client)
 		}
 	}
 }
