@@ -79,6 +79,8 @@ func joinHandler(client *Client) error {
 	client.joined = true
 	mu.Unlock()
 
+	fmt.Printf("server: new client joined\n")
+	fmt.Printf("[clients: %d]", len(clients))
 	msg := protocol.Message{
 		Type: protocol.TypeJoinAck,
 		From: protocol.Server,
@@ -132,7 +134,7 @@ func semanticValidator(m *protocol.Message, client *Client) error {
 	if m.Type == protocol.TypeLeave && !client.joined {
 		return fmt.Errorf("client (%s) is not joined", client.id)
 	}
-	
+
 	return nil
 }
 
