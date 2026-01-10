@@ -53,13 +53,15 @@ func msgWriter(m *protocol.Message, client *Client) error {
 // Broadcaster: broadcast a message to all clients except the sender
 func broadcaster(msg *protocol.Message, sender *Client) {
 	mu.Lock()
-	defer mu.Unlock()
-
+	clientList := make([]*Client, 0, len(clients))
 	for client := range clients {
-		// Skip the sender
-		if client == sender {
-			continue
+		if client != sender {
+			clientList = append(clientList, client)
 		}
+	}
+	mu.Unlock()
+
+	for _, client := range clientList {
 		err := msgWriter(msg, client)
 		if err != nil {
 			continue
