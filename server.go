@@ -111,13 +111,14 @@ func chatHandler(msg *protocol.Message, client *Client) error {
 // Leave handler: handles gracefull shutdown or delete of client on leave
 func leaveHandler(client *Client) error {
 	mu.Lock()
-	if client.joined {
+	if _, exits := clients[client]; exits && client.joined {
 		delete(clients, client)
 		client.joined = false
+		mu.Unlock()
+		client.conn.Close()
+		return nil
 	}
 	mu.Unlock()
-
-	client.conn.Close()
 	return nil
 }
 
