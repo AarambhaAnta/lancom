@@ -18,7 +18,7 @@ var (
 )
 
 func show(m *protocol.Message) {
-	fmt.Printf("<⬇ %s> %s\n", m.From, m.Body)
+	fmt.Printf("%s> %s\n> ", m.From, m.Body)
 }
 
 // msgWriter: writes message to the connection
@@ -111,6 +111,7 @@ func main() {
 
 	// Main loop to read from stdin and send to server
 	for {
+		fmt.Print("> ")
 		msg, err := stdinReader.ReadString('\n')
 		if err != nil {
 			fmt.Println("client: read error:", err)

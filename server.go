@@ -26,6 +26,7 @@ type Client struct {
 	writer *bufio.Writer
 	id     string
 	joined bool
+	nick   string
 }
 
 // getNextClientID generates a sequential, unique client ID
@@ -79,6 +80,7 @@ func joinHandler(client *Client) error {
 	clients[client] = true
 	client.id = getNextClientID()
 	client.joined = true
+	client.nick = client.id
 	mu.Unlock()
 
 	fmt.Printf("server: new client joined\n")
@@ -140,6 +142,63 @@ func semanticValidator(m *protocol.Message, client *Client) error {
 	return nil
 }
 
+// Nick Command: command handler that handles the change of nick names for a client
+func nickCommand(parts []string, client *Client) error {
+	if len(parts) != 2 {
+		return msgWriter(&protocol.Message{
+			Type: protocol.TypeChatAck,
+			From: protocol.Server,
+			To:   client.id,
+			Body: "usage: /nick <name>",
+		}, client)
+	}
+
+	newNick := parts[1]
+	if len(newNick) < 3 {
+		return msgWriter(&protocol.Message{
+			Type: protocol.TypeChatAck,
+			From: protocol.Server,
+			To:   client.id,
+			Body: "nick name too short",
+		}, client)
+	}
+
+	mu.Lock()
+	oldNick := client.nick
+	client.nick = newNick
+	mu.Unlock()
+
+	// broadcast change of nick name
+	broadcaster(&protocol.Message{
+		Type: protocol.TypeChat,
+		From: protocol.Server,
+		To:   protocol.All,
+		Body: fmt.Sprintf("[ %s ] -> %s", oldNick, newNick),
+	}, nil)
+
+	return nil
+}
+
+// Command handler: handles different types of command like `/nick`, `/who`
+func commandHandler(msg *protocol.Message, client *Client) error {
+	parts := strings.Fields(msg.Body)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	switch parts[0] {
+	case "/nick":
+		return nickCommand(parts, client)
+	default:
+		return msgWriter(&protocol.Message{
+			Type: protocol.TypeChatAck,
+			From: protocol.Server,
+			To:   client.id,
+			Body: "unknown command",
+		}, client)
+	}
+}
+
 // Message handler: decides what to do for different types of message
 func messageHandler(msg *string, client *Client) error {
 	msgObj, err := protocol.Decode([]byte(*msg))
@@ -160,12 +219,15 @@ func messageHandler(msg *string, client *Client) error {
 		return err
 	}
 
-	msgObj.From = client.id
+	msgObj.From = client.nick
 
 	switch msgObj.Type {
 	case protocol.TypeJoin:
 		return joinHandler(client)
 	case protocol.TypeChat:
+		if strings.HasPrefix(msgObj.Body, "/") {
+			return commandHandler(msgObj, client)
+		}
 		return chatHandler(msgObj, client)
 	case protocol.TypeLeave:
 		return leaveHandler(client)

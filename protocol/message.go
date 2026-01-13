@@ -13,6 +13,7 @@ const (
 	TypeLeave   = "leave"
 	TypeError   = "error"
 	Server      = "server"
+	All = "all"
 	Version     = "1.0"
 )
 
