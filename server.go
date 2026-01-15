@@ -15,8 +15,12 @@ import (
 // Map to track all connected clients
 var (
 	clients         = make(map[*Client]bool)
+	nicks           = make(map[string]*Client)
 	mu              sync.Mutex
 	clientIDCounter uint64 // atomic counter for sequential IDs
+	reservedName    = map[string]struct{}{
+		"server": {}, "client": {}, "admin": {}, "root": {}, "system": {},
+	}
 )
 
 // Client represents a connected chat client
@@ -73,7 +77,6 @@ func broadcaster(msg *protocol.Message, sender *Client) {
 // Join handler: handles what to do on join
 func joinHandler(client *Client) error {
 	mu.Lock()
-
 	if client.joined {
 		return fmt.Errorf("Client already joined")
 	}
@@ -81,6 +84,7 @@ func joinHandler(client *Client) error {
 	client.id = getNextClientID()
 	client.joined = true
 	client.nick = client.id
+	nicks[client.nick] = client
 	mu.Unlock()
 
 	fmt.Printf("server: new client joined\n")
@@ -117,6 +121,7 @@ func chatHandler(msg *protocol.Message, client *Client) error {
 func leaveHandler(client *Client) error {
 	mu.Lock()
 	if _, exits := clients[client]; exits && client.joined {
+		delete(nicks, client.nick)
 		delete(clients, client)
 		client.joined = false
 		mu.Unlock()
@@ -143,29 +148,13 @@ func semanticValidator(m *protocol.Message, client *Client) error {
 }
 
 // Nick Command: command handler that handles the change of nick names for a client
-func nickCommand(parts []string, client *Client) error {
-	if len(parts) != 2 {
-		return msgWriter(&protocol.Message{
-			Type: protocol.TypeChatAck,
-			From: protocol.Server,
-			To:   client.id,
-			Body: "usage: /nick <name>",
-		}, client)
-	}
-
-	newNick := parts[1]
-	if len(newNick) < 3 {
-		return msgWriter(&protocol.Message{
-			Type: protocol.TypeChatAck,
-			From: protocol.Server,
-			To:   client.id,
-			Body: "nick name too short",
-		}, client)
-	}
-
+func nickCommand(args []string, client *Client) error {
+	newNick := args[0]
 	mu.Lock()
 	oldNick := client.nick
 	client.nick = newNick
+	nicks[newNick] = client
+	delete(nicks, oldNick)
 	mu.Unlock()
 
 	// broadcast change of nick name
@@ -173,22 +162,60 @@ func nickCommand(parts []string, client *Client) error {
 		Type: protocol.TypeChat,
 		From: protocol.Server,
 		To:   protocol.All,
-		Body: fmt.Sprintf("[ %s ] -> %s", oldNick, newNick),
+		Body: fmt.Sprintf("%s -> %s", oldNick, newNick),
 	}, nil)
 
 	return nil
 }
 
+// Command Parser: used to parse a string into command and arguments
+func commandParser(cmd string) (string, []string, error) {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return "", nil, fmt.Errorf("not a valid command")
+	}
+	return parts[0], parts[1:], nil
+}
+
+// Command Validate: validates all the commands before executing
+func commandValidate(cmd string, args []string) error {
+	switch cmd {
+	case "/nick":
+		if len(args) == 0 {
+			return fmt.Errorf("invalid arguments")
+		}
+		nick := args[0]
+
+		if len(nick) < 3 {
+			return fmt.Errorf("nick name too short")
+		}
+		if _, exists := nicks[nick]; exists {
+			return fmt.Errorf("nick name already taken")
+		}
+		if _, ok := reservedName[strings.ToLower(nick)]; ok {
+			return fmt.Errorf("nick name is reserved")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown command")
+	}
+}
+
 // Command handler: handles different types of command like `/nick`, `/who`
 func commandHandler(msg *protocol.Message, client *Client) error {
-	parts := strings.Fields(msg.Body)
-	if len(parts) == 0 {
-		return nil
+	cmd, args, err := commandParser(msg.Body)
+	if err != nil {
+		return err
 	}
 
-	switch parts[0] {
+	err = commandValidate(cmd, args)
+	if err != nil {
+		return err
+	}
+
+	switch cmd {
 	case "/nick":
-		return nickCommand(parts, client)
+		return nickCommand(args, client)
 	default:
 		return msgWriter(&protocol.Message{
 			Type: protocol.TypeChatAck,
