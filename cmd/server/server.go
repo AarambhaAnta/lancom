@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 )
 
-// Map to track all connected clients
 var (
 	clients         = make(map[*Client]bool)
 	nicks           = make(map[string]*Client)
@@ -237,7 +236,7 @@ func messageHandler(msg *string, client *Client) error {
 		return err
 	}
 
-	if !client.joined && msgObj.Type != protocol.TypeJoin {
+	if !client.joined && msgObj.Type != protocol.TypeJoinReq {
 		return errors.New("client must join first")
 	}
 
@@ -249,7 +248,7 @@ func messageHandler(msg *string, client *Client) error {
 	msgObj.From = client.nick
 
 	switch msgObj.Type {
-	case protocol.TypeJoin:
+	case protocol.TypeJoinReq:
 		return joinHandler(client)
 	case protocol.TypeChat:
 		if strings.HasPrefix(msgObj.Body, "/") {
@@ -278,7 +277,7 @@ func clientHandler(client *Client) {
 
 		err = messageHandler(&msg, client)
 		if err != nil {
-			fmt.Println("error processing message from %s: %v\n", client.id, err)
+			fmt.Printf("error processing message from %s: %v\n", client.id, err)
 			errMsg := protocol.Message{
 				Type: protocol.TypeError,
 				From: protocol.Server,

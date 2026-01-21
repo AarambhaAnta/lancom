@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	TypeJoin    = "join"
+	TypeJoinReq    = "join_req"
 	TypeJoinAck = "join_ack"
 	TypeChat    = "chat"
 	TypeChatAck = "chat_ack"

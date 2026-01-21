@@ -135,4 +135,3 @@ Sample package structure:
 /core/protocol
 /core/transport
 ```
-
