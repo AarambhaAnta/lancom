@@ -6,15 +6,15 @@ import (
 )
 
 const (
-	TypeJoinReq    = "join_req"
-	TypeJoinAck = "join_ack"
-	TypeChat    = "chat"
-	TypeChatAck = "chat_ack"
-	TypeLeave   = "leave"
-	TypeError   = "error"
-	Server      = "server"
-	All         = "all"
-	Version     = "1.0"
+	TypeJoinReq  = "join_req"
+	TypeJoinAck  = "join_ack"
+	TypeChat     = "chat"
+	TypeChatAck  = "chat_ack"
+	TypeLeave    = "leave"
+	ErrorMessage = "error_message"
+	Server       = "server"
+	All          = "all"
+	Version      = "1.0"
 )
 
 // Protocol knows JSON
