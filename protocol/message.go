@@ -10,6 +10,12 @@ const (
 	TypeJoinAck  = "join_ack"
 	TypeChat     = "chat"
 	TypeChatAck  = "chat_ack"
+	TypeDM       = "dm"
+	TypeDMAck    = "dm_ack"
+	TypeNickReq  = "nick_req"
+	TypeNickAck  = "nick_ack"
+	TypeListReq  = "list_req"
+	TypeListAck  = "list_ack"
 	TypeLeave    = "leave"
 	ErrorMessage = "error_message"
 	Server       = "server"
@@ -53,6 +59,9 @@ func (m *Message) Validate() error {
 	}
 	if m.Type == "" {
 		return errors.New("message type cannot be empty")
+	}
+	if m.Type == TypeDM && m.To == "" {
+		return errors.New("dm requires at least one recipient")
 	}
 	return nil
 }
