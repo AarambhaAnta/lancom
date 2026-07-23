@@ -30,13 +30,29 @@ type model struct {
 
 type msgReceived string
 
-var inputStyle = lipgloss.NewStyle().
-	BorderStyle(lipgloss.NormalBorder()).
-	BorderForeground(lipgloss.Color("63")).
-	Padding(0, 1)
+var (
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("212")).
+			Padding(0, 1)
 
-var messagesStyle = lipgloss.NewStyle().
-	Padding(1, 2)
+	inputStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("212")).
+			Padding(0, 1)
+
+	messagesStyle = lipgloss.NewStyle().
+			BorderStyle(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("240")).
+			Padding(0, 1).
+			AlignVertical(lipgloss.Bottom)
+
+	selfColor   = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))  // green: your own messages
+	peerColor   = lipgloss.NewStyle().Foreground(lipgloss.Color("255")) // white: broadcasts from others
+	dmColor     = lipgloss.NewStyle().Foreground(lipgloss.Color("212")) // pink: private messages
+	systemColor = lipgloss.NewStyle().Foreground(lipgloss.Color("244")) // gray: acks/roster/system
+	errorColor  = lipgloss.NewStyle().Foreground(lipgloss.Color("203")) // red: errors
+)
 
 func initialModel(conn net.Conn) model {
 	return model{
@@ -84,7 +100,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		default:
-			m.input += msg.String()
+			// Only append actual typed characters (letters/digits/symbols and
+			// space bar). Without this guard, any non-printable key (arrows,
+			// ctrl+u, tab, ...) falls through to String() and inserts its
+			// literal name (e.g. "ctrl+u") as text; space bar is its own
+			// KeyType distinct from KeyRunes, so it needs listing explicitly.
+			if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+				m.input += msg.String()
+			}
 			return m, nil
 		}
 
@@ -105,29 +128,33 @@ func (m model) View() string {
 		return "Initializing..."
 	}
 
-	// Calculate available space
-	inputHeight := 3 // border + padding
-	messagesHeight := m.height - inputHeight
+	// Calculate available space: 1 row for the header, 3 for the bordered
+	// input box (2 border + 1 content), whatever's left for the message box.
+	headerHeight := 1
+	inputHeight := 3
+	messagesBoxHeight := max(m.height-headerHeight-inputHeight, 3)
+	contentHeight := messagesBoxHeight - 2 // minus the message box's own border
 
-	// Render messages (scrollable area)
-	var messagesToShow []string
-	startIdx := 0
-	if len(m.messages) > messagesHeight-2 {
-		startIdx = len(m.messages) - (messagesHeight - 2)
+	// Keep only as many messages as fit; AlignVertical(Bottom) then keeps
+	// them anchored just above the input box instead of floating at the
+	// top of a mostly-empty pane.
+	messagesToShow := m.messages
+	if len(messagesToShow) > contentHeight {
+		messagesToShow = messagesToShow[len(messagesToShow)-contentHeight:]
 	}
-	messagesToShow = m.messages[startIdx:]
+
+	header := headerStyle.Render(fmt.Sprintf("lancom · %s", myId))
 
 	messagesView := messagesStyle.
 		Width(m.width - 4).
-		Height(messagesHeight - 2).
+		Height(contentHeight).
 		Render(strings.Join(messagesToShow, "\n"))
 
-	// Render input (fixed at bottom)
 	inputView := inputStyle.
 		Width(m.width - 4).
-		Render(fmt.Sprintf("Message: %s", m.input))
+		Render(fmt.Sprintf("➜ %s", m.input))
 
-	return fmt.Sprintf("%s\n%s", messagesView, inputView)
+	return fmt.Sprintf("%s\n%s\n%s", header, messagesView, inputView)
 }
 
 // handleSubmit: routes a submitted input line to a command or a broadcast chat
@@ -144,9 +171,9 @@ func handleSubmit(input string, messages []string) []string {
 		Body: input,
 	}
 	if err := messageWriter(msg); err != nil {
-		return append(messages, fmt.Sprintf("Error: %v", err))
+		return append(messages, errorColor.Render(fmt.Sprintf("Error: %v", err)))
 	}
-	return append(messages, fmt.Sprintf("you> %s", input))
+	return append(messages, selfColor.Render(fmt.Sprintf("you> %s", input)))
 }
 
 // runCommand: parses a "/"-prefixed input line into the matching protocol request
@@ -157,7 +184,7 @@ func runCommand(input string, messages []string) []string {
 	case "/msg":
 		recipients, body, ok := strings.Cut(rest, " ")
 		if !ok || recipients == "" || body == "" {
-			return append(messages, "usage: /msg <recipient[,recipient...]> <message>")
+			return append(messages, systemColor.Render("usage: /msg <recipient[,recipient...]> <message>"))
 		}
 		msg := &protocol.Message{
 			Type: protocol.TypeDM,
@@ -166,13 +193,13 @@ func runCommand(input string, messages []string) []string {
 			Body: body,
 		}
 		if err := messageWriter(msg); err != nil {
-			return append(messages, fmt.Sprintf("Error: %v", err))
+			return append(messages, errorColor.Render(fmt.Sprintf("Error: %v", err)))
 		}
-		return append(messages, fmt.Sprintf("you -> %s> %s", recipients, body))
+		return append(messages, selfColor.Render(fmt.Sprintf("you -> %s> %s", recipients, body)))
 
 	case "/nick":
 		if rest == "" {
-			return append(messages, "usage: /nick <new-name>")
+			return append(messages, systemColor.Render("usage: /nick <new-name>"))
 		}
 		msg := &protocol.Message{
 			Type: protocol.TypeNickReq,
@@ -181,7 +208,7 @@ func runCommand(input string, messages []string) []string {
 			Body: rest,
 		}
 		if err := messageWriter(msg); err != nil {
-			return append(messages, fmt.Sprintf("Error: %v", err))
+			return append(messages, errorColor.Render(fmt.Sprintf("Error: %v", err)))
 		}
 		return messages
 
@@ -192,12 +219,12 @@ func runCommand(input string, messages []string) []string {
 			To:   protocol.Server,
 		}
 		if err := messageWriter(msg); err != nil {
-			return append(messages, fmt.Sprintf("Error: %v", err))
+			return append(messages, errorColor.Render(fmt.Sprintf("Error: %v", err)))
 		}
 		return messages
 
 	default:
-		return append(messages, fmt.Sprintf("unknown command: %s", cmd))
+		return append(messages, systemColor.Render(fmt.Sprintf("unknown command: %s", cmd)))
 	}
 }
 
@@ -223,22 +250,23 @@ func waitForMessages(conn net.Conn) tea.Cmd {
 			}
 
 			switch msgObj.Type {
-			case protocol.TypeChatAck:
+			case protocol.TypeChatAck, protocol.TypeNickAck:
+				// chat_ack is a silent sender-only receipt; nick_ack is made
+				// redundant by the room-wide "X is now known as Y" broadcast
+				// the renamer also receives, so neither needs its own line.
 				continue
 			case protocol.TypeChat:
-				return msgReceived(fmt.Sprintf("<%s> %s", msgObj.From, msgObj.Body))
+				return msgReceived(peerColor.Render(fmt.Sprintf("<%s> %s", msgObj.From, msgObj.Body)))
 			case protocol.TypeDM:
-				return msgReceived(fmt.Sprintf("[DM from %s] %s", msgObj.From, msgObj.Body))
+				return msgReceived(dmColor.Render(fmt.Sprintf("[DM from %s] %s", msgObj.From, msgObj.Body)))
 			case protocol.TypeDMAck:
-				return msgReceived(fmt.Sprintf("* %s", msgObj.Body))
-			case protocol.TypeNickAck:
-				return msgReceived(fmt.Sprintf("* you are now known as %s", msgObj.Body))
+				return msgReceived(systemColor.Render(fmt.Sprintf("* %s", msgObj.Body)))
 			case protocol.TypeListAck:
-				return msgReceived(fmt.Sprintf("* online: %s", strings.ReplaceAll(msgObj.Body, ",", ", ")))
+				return msgReceived(systemColor.Render(fmt.Sprintf("* online: %s", strings.ReplaceAll(msgObj.Body, ",", ", "))))
 			case protocol.ErrorMessage:
-				return msgReceived(fmt.Sprintf("* error: %s", msgObj.Body))
+				return msgReceived(errorColor.Render(fmt.Sprintf("* error: %s", msgObj.Body)))
 			default:
-				return msgReceived(fmt.Sprintf("* unhandled message type: %s", msgObj.Type))
+				return msgReceived(systemColor.Render(fmt.Sprintf("* unhandled message type: %s", msgObj.Type)))
 			}
 		}
 	}
