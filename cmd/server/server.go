@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"lancom/protocol"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -195,10 +196,21 @@ func leaveHandler(client *Client) error {
 	// release all the resources allocated to a client
 	mutexLock.Lock()
 	if _, exists := clients[client]; exists && client.isJoined {
-		delete(nickNames, client.nickName)
+		nickName := client.nickName
+		delete(nickNames, nickName)
 		client.conn.Close()
 		delete(clients, client)
+		remaining := len(clients)
 		mutexLock.Unlock()
+
+		fmt.Printf("[clients: %d]\n", remaining)
+		fmt.Printf("%s left\n", nickName)
+		broadcastMessage(&protocol.Message{
+			Type: protocol.TypeChat,
+			From: protocol.Server,
+			To:   protocol.All,
+			Body: fmt.Sprintf("%s left the room", nickName),
+		}, nil)
 		return nil
 	}
 	mutexLock.Unlock()
@@ -292,7 +304,6 @@ func clientHandler(client *Client) {
 	for {
 		msg, err := client.reader.ReadString('\n')
 		if err != nil {
-			// TODO: handle this if error occurs too-many times, exit and trigger defered cleanup
 			return
 		}
 
@@ -344,7 +355,7 @@ func main() {
 	err := initialSetup()
 	if err != nil {
 		fmt.Println("initial setup error, ", err)
-		// TODO: you need to gracefull shutdown the server
+		os.Exit(1)
 	}
 
 	fmt.Println("listening on 127.0.0.1:9000")

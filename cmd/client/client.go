@@ -65,10 +65,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			sendLeave()
 			return m, tea.Quit
 		case "enter":
 			trimmed := strings.TrimSpace(m.input)
 			if trimmed == "/quit" {
+				sendLeave()
 				return m, tea.Quit
 			}
 			if trimmed != "" {
@@ -253,6 +255,16 @@ func messageWriter(m *protocol.Message) error {
 		return err
 	}
 	return connWriter.Flush()
+}
+
+// sendLeave: tells the server we're leaving instead of just dropping the
+// connection, so other clients get an immediate "left the room" notice
+func sendLeave() {
+	messageWriter(&protocol.Message{
+		Type: protocol.TypeLeave,
+		From: myId,
+		To:   protocol.Server,
+	})
 }
 
 // joinHandler: performs the initial join handshake with the server
