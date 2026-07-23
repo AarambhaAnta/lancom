@@ -75,107 +75,102 @@ func broadcastMessage(msg *protocol.Message, sender *Client) {
 		}
 	}
 }
-// // singleMessage is a personal message to a particular client
-// func singleMessage(msg *protocol.Message) error {
-// 	msg.Body = "@abhi hi,ola"
-// 	parts := strings.SplitN(msg.Body, " ", 2)
-// 		if len(parts) < 2 {
-// 			return fmt.Errorf("invalid message format")
-// 		}
-// 		recipientNick := strings.TrimPrefix(parts[0], "@")
-// 		messageBody := parts[1]
-		
-// 		mutexLock.Lock()
-// 		recipient, exists := nickNames[recipientNick]
-// 		mutexLock.Unlock()
-		
-// 		if !exists {
-// 			return fmt.Errorf("user %s not found", recipientNick)
-// 		}
-		
-// 		msg.To = recipient.id
-// 		msg.Body = messageBody
-// 	return messageWriter(msg, nickNames[msg.To])
-// }
+// dmHandler: resolves comma-separated recipient nicknames in msg.To, forwards the
+// message to each one found, and reports delivery status back to the sender
+func dmHandler(msg *protocol.Message, sender *Client) error {
+	recipientNicks := strings.Split(msg.To, ",")
 
-// // Nick Command: command handler that handles the change of nick names for a client
-// func nickCommand(args []string, client *Client) error {
-// 	newNick := args[0]
-// 	mu.Lock()
-// 	oldNick := client.nick
-// 	client.nick = newNick
-// 	nicks[newNick] = client
-// 	delete(nicks, oldNick)
-// 	mu.Unlock()
+	mutexLock.Lock()
+	recipients := make([]*Client, 0, len(recipientNicks))
+	var notFound []string
+	for _, nick := range recipientNicks {
+		nick = strings.TrimSpace(nick)
+		if client, exists := nickNames[nick]; exists {
+			recipients = append(recipients, client)
+		} else {
+			notFound = append(notFound, nick)
+		}
+	}
+	mutexLock.Unlock()
 
-// 	// broadcast change of nick name
-// 	broadcaster(&protocol.Message{
-// 		Type: protocol.TypeChat,
-// 		From: protocol.Server,
-// 		To:   protocol.All,
-// 		Body: fmt.Sprintf("%s -> %s", oldNick, newNick),
-// 	}, nil)
+	for _, recipient := range recipients {
+		if err := messageWriter(msg, recipient); err != nil {
+			// TODO: log info of the recipient that didn't receive
+			continue
+		}
+	}
 
-// 	return nil
-// }
+	ack := protocol.Message{
+		Type: protocol.TypeDMAck,
+		From: protocol.Server,
+		To:   sender.id,
+		Body: fmt.Sprintf("delivered to %d recipient(s)", len(recipients)),
+	}
+	if len(notFound) > 0 {
+		ack.Body += "; not found: " + strings.Join(notFound, ", ")
+	}
+	return messageWriter(&ack, sender)
+}
 
-// // Command Parser: used to parse a string into command and arguments
-// func commandParser(cmd string) (string, []string, error) {
-// 	parts := strings.Fields(cmd)
-// 	if len(parts) == 0 {
-// 		return "", nil, fmt.Errorf("not a valid command")
-// 	}
-// 	return parts[0], parts[1:], nil
-// }
+// nickHandler: validates and applies a nickname change, then announces it to the room
+func nickHandler(msg *protocol.Message, client *Client) error {
+	newNick := strings.TrimSpace(msg.Body)
+	if len(newNick) < 3 {
+		return fmt.Errorf("nickname must be at least 3 characters")
+	}
 
-// // Command Validate: validates all the commands before executing
-// func commandValidate(cmd string, args []string) error {
-// 	switch cmd {
-// 	case "/nick":
-// 		if len(args) == 0 {
-// 			return fmt.Errorf("invalid arguments")
-// 		}
-// 		nick := args[0]
+	mutexLock.Lock()
+	if _, taken := nickNames[newNick]; taken {
+		mutexLock.Unlock()
+		return fmt.Errorf("nickname %q is already taken", newNick)
+	}
+	if _, reserved := reservedNames[strings.ToLower(newNick)]; reserved {
+		mutexLock.Unlock()
+		return fmt.Errorf("nickname %q is reserved", newNick)
+	}
 
-// 		if len(nick) < 3 {
-// 			return fmt.Errorf("nick name too short")
-// 		}
-// 		if _, exists := nicks[nick]; exists {
-// 			return fmt.Errorf("nick name already taken")
-// 		}
-// 		if _, ok := reservedName[strings.ToLower(nick)]; ok {
-// 			return fmt.Errorf("nick name is reserved")
-// 		}
-// 		return nil
-// 	default:
-// 		return fmt.Errorf("unknown command")
-// 	}
-// }
+	oldNick := client.nickName
+	delete(nickNames, oldNick)
+	client.nickName = newNick
+	nickNames[newNick] = client
+	mutexLock.Unlock()
 
-// // Command handler: handles different types of command like `/nick`, `/who`
-// func commandHandler(msg *protocol.Message, client *Client) error {
-// 	cmd, args, err := commandParser(msg.Body)
-// 	if err != nil {
-// 		return err
-// 	}
+	ack := protocol.Message{
+		Type: protocol.TypeNickAck,
+		From: protocol.Server,
+		To:   client.id,
+		Body: newNick,
+	}
+	if err := messageWriter(&ack, client); err != nil {
+		return err
+	}
 
-// 	err = commandValidate(cmd, args)
-// 	if err != nil {
-// 		return err
-// 	}
+	broadcastMessage(&protocol.Message{
+		Type: protocol.TypeChat,
+		From: protocol.Server,
+		To:   protocol.All,
+		Body: fmt.Sprintf("%s is now known as %s", oldNick, newNick),
+	}, nil)
+	return nil
+}
 
-// 	switch cmd {
-// 	case "/nick":
-// 		return nickCommand(args, client)
-// 	default:
-// 		return messageWriter(&protocol.Message{
-// 			Type: protocol.TypeChatAck,
-// 			From: protocol.Server,
-// 			To:   client.id,
-// 			Body: "unknown command",
-// 		}, client)
-// 	}
-// }
+// listHandler: reports the nicknames of all currently connected clients
+func listHandler(client *Client) error {
+	mutexLock.Lock()
+	online := make([]string, 0, len(nickNames))
+	for nick := range nickNames {
+		online = append(online, nick)
+	}
+	mutexLock.Unlock()
+
+	ack := protocol.Message{
+		Type: protocol.TypeListAck,
+		From: protocol.Server,
+		To:   client.id,
+		Body: strings.Join(online, ","),
+	}
+	return messageWriter(&ack, client)
+}
 
 // Chat handler: handles what do on chat request
 func chatHandler(msg *protocol.Message, client *Client) error {
@@ -276,15 +271,13 @@ func messageHandler(msg *string, client *Client) error {
 	case protocol.TypeJoinReq:
 		return joinHandler(client)
 	case protocol.TypeChat:
-		if strings.HasPrefix(msgObj.Body, "/") {
-			// return commandHandler(msgObj, client)
-			return nil
-		}
-		if strings.HasPrefix(msgObj.Body, "@") {
-			// TODO: handle single person/personal message
-			return nil
-		}
 		return chatHandler(msgObj, client)
+	case protocol.TypeDM:
+		return dmHandler(msgObj, client)
+	case protocol.TypeNickReq:
+		return nickHandler(msgObj, client)
+	case protocol.TypeListReq:
+		return listHandler(client)
 	case protocol.TypeLeave:
 		return leaveHandler(client)
 	}
