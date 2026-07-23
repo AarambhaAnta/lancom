@@ -4,6 +4,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"flag"
 	"fmt"
 	"lancom/protocol"
 	"net"
@@ -333,9 +334,9 @@ func makeNewClient(conn *net.Conn) *Client {
 }
 
 // initialSetup: does all the initial setup, like firing up a listener and reserving/declaring some resources/constants
-func initialSetup() error {
+func initialSetup(addr string) error {
 	var err error
-	listener, err = net.Listen("tcp", "127.0.0.1:9000")
+	listener, err = net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -351,14 +352,17 @@ func initialSetup() error {
 }
 
 func main() {
+	addr := flag.String("addr", ":9000", "address to listen on (host:port); host empty means all interfaces")
+	flag.Parse()
+
 	// initial setup
-	err := initialSetup()
+	err := initialSetup(*addr)
 	if err != nil {
 		fmt.Println("initial setup error, ", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("listening on 127.0.0.1:9000")
+	fmt.Printf("listening on %s\n", *addr)
 
 	// persistant loop for new client to join
 	for {

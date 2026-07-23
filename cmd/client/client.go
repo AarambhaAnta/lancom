@@ -3,6 +3,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"lancom/protocol"
 	"net"
@@ -322,7 +323,10 @@ func joinHandler() error {
 }
 
 func main() {
-	conn, err := net.Dial("tcp", "127.0.0.1:9000")
+	server := flag.String("server", "127.0.0.1:9000", "address of the lancom server (host:port)")
+	flag.Parse()
+
+	conn, err := net.Dial("tcp", *server)
 	if err != nil {
 		fmt.Println("client: failed to connect:", err)
 		os.Exit(1)
