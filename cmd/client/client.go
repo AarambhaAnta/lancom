@@ -8,162 +8,298 @@ import (
 	"net"
 	"os"
 	"strings"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 var (
-	connReader  *bufio.Reader
-	connWriter  *bufio.Writer
-	stdinReader *bufio.Reader
-	myId        string
+	connReader *bufio.Reader
+	connWriter *bufio.Writer
+	myId       string
 )
 
-func show(m *protocol.Message) {
-	fmt.Printf("%s> %s\n> ", m.From, m.Body)
+type model struct {
+	messages []string
+	input    string
+	width    int
+	height   int
+	conn     net.Conn
+	ready    bool
 }
 
-// messageWrite: does versioning, encoding, writing of the message object
-func messageWriter(msg *protocol.Message) error {
-	msg.Version = protocol.Version
+type msgReceived string
 
-	data, err := protocol.Encode(msg)
-	if err != nil {
-		return err
-	}
-	_, err = connWriter.WriteString(string(data) + "\n")
-	if err != nil {
-		return err
-	}
-	connWriter.Flush()
+var inputStyle = lipgloss.NewStyle().
+	BorderStyle(lipgloss.NormalBorder()).
+	BorderForeground(lipgloss.Color("63")).
+	Padding(0, 1)
 
-	return nil
+var messagesStyle = lipgloss.NewStyle().
+	Padding(1, 2)
+
+func initialModel(conn net.Conn) model {
+	return model{
+		messages: []string{},
+		input:    "",
+		conn:     conn,
+		ready:    false,
+	}
 }
 
-// messageHandler: decides on what to do of the received message based on type of message
-func messageHandler(msg *string) error {
-	msgObj, err := protocol.Decode([]byte(*msg))
-	if err != nil {
-		return err
-	}
-	err = msgObj.Validate()
-	if err != nil {
-		return err
+func (m model) Init() tea.Cmd {
+	return tea.Batch(
+		waitForMessages(m.conn),
+		tea.EnterAltScreen,
+	)
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ready = true
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "enter":
+			trimmed := strings.TrimSpace(m.input)
+			if trimmed == "/quit" {
+				return m, tea.Quit
+			}
+			if trimmed != "" {
+				m.messages = handleSubmit(trimmed, m.messages)
+			}
+			m.input = ""
+			return m, nil
+		case "backspace":
+			if len(m.input) > 0 {
+				m.input = m.input[:len(m.input)-1]
+			}
+			return m, nil
+		default:
+			m.input += msg.String()
+			return m, nil
+		}
+
+	case msgReceived:
+		m.messages = append(m.messages, string(msg))
+		return m, waitForMessages(m.conn)
+
+	case error:
+		m.messages = append(m.messages, fmt.Sprintf("Error: %v", msg))
+		return m, tea.Quit
 	}
 
-	switch msgObj.Type {
-	case protocol.TypeJoinAck:
-		myId = msgObj.Body
-		return nil
-	case protocol.TypeChatAck:
-		return nil
-	case protocol.TypeChat:
-		show(msgObj)
+	return m, nil
+}
+
+func (m model) View() string {
+	if !m.ready {
+		return "Initializing..."
+	}
+
+	// Calculate available space
+	inputHeight := 3 // border + padding
+	messagesHeight := m.height - inputHeight
+
+	// Render messages (scrollable area)
+	var messagesToShow []string
+	startIdx := 0
+	if len(m.messages) > messagesHeight-2 {
+		startIdx = len(m.messages) - (messagesHeight - 2)
+	}
+	messagesToShow = m.messages[startIdx:]
+
+	messagesView := messagesStyle.
+		Width(m.width - 4).
+		Height(messagesHeight - 2).
+		Render(strings.Join(messagesToShow, "\n"))
+
+	// Render input (fixed at bottom)
+	inputView := inputStyle.
+		Width(m.width - 4).
+		Render(fmt.Sprintf("Message: %s", m.input))
+
+	return fmt.Sprintf("%s\n%s", messagesView, inputView)
+}
+
+// handleSubmit: routes a submitted input line to a command or a broadcast chat
+// message, sends it, and appends a local echo so the sender sees their own message
+func handleSubmit(input string, messages []string) []string {
+	if strings.HasPrefix(input, "/") {
+		return runCommand(input, messages)
+	}
+
+	msg := &protocol.Message{
+		Type: protocol.TypeChat,
+		From: myId,
+		To:   protocol.All,
+		Body: input,
+	}
+	if err := messageWriter(msg); err != nil {
+		return append(messages, fmt.Sprintf("Error: %v", err))
+	}
+	return append(messages, fmt.Sprintf("you> %s", input))
+}
+
+// runCommand: parses a "/"-prefixed input line into the matching protocol request
+func runCommand(input string, messages []string) []string {
+	cmd, rest, _ := strings.Cut(input, " ")
+
+	switch cmd {
+	case "/msg":
+		recipients, body, ok := strings.Cut(rest, " ")
+		if !ok || recipients == "" || body == "" {
+			return append(messages, "usage: /msg <recipient[,recipient...]> <message>")
+		}
+		msg := &protocol.Message{
+			Type: protocol.TypeDM,
+			From: myId,
+			To:   recipients,
+			Body: body,
+		}
+		if err := messageWriter(msg); err != nil {
+			return append(messages, fmt.Sprintf("Error: %v", err))
+		}
+		return append(messages, fmt.Sprintf("you -> %s> %s", recipients, body))
+
+	case "/nick":
+		if rest == "" {
+			return append(messages, "usage: /nick <new-name>")
+		}
+		msg := &protocol.Message{
+			Type: protocol.TypeNickReq,
+			From: myId,
+			To:   protocol.Server,
+			Body: rest,
+		}
+		if err := messageWriter(msg); err != nil {
+			return append(messages, fmt.Sprintf("Error: %v", err))
+		}
+		return messages
+
+	case "/list":
+		msg := &protocol.Message{
+			Type: protocol.TypeListReq,
+			From: myId,
+			To:   protocol.Server,
+		}
+		if err := messageWriter(msg); err != nil {
+			return append(messages, fmt.Sprintf("Error: %v", err))
+		}
+		return messages
+
 	default:
-		fmt.Println("invalid message type")
-	}
-
-	return nil
-}
-
-// connectionHandler: does the infinite i/o to the server
-func connectionHandler() error {
-	// persistant read/write tunnel
-	for {
-		msg, err := connReader.ReadString('\n')
-		if err != nil {
-			return err
-		}
-		err = messageHandler(&msg)
-		if err != nil {
-			return err
-		}
-
-		// TODO: implement gracefull exit from loop
+		return append(messages, fmt.Sprintf("unknown command: %s", cmd))
 	}
 }
 
+// waitForMessages: blocks for the next line from the server and turns it into a
+// tea.Msg, formatted according to its protocol message type
+func waitForMessages(conn net.Conn) tea.Cmd {
+	return func() tea.Msg {
+		// Loops past ack-only message types instead of returning nil: a nil
+		// tea.Msg would end the command chain and the client would stop
+		// reading from the socket after the very first chat_ack.
+		for {
+			line, err := connReader.ReadString('\n')
+			if err != nil {
+				return error(fmt.Errorf("server disconnected: %w", err))
+			}
+
+			msgObj, err := protocol.Decode([]byte(line))
+			if err != nil {
+				return error(err)
+			}
+			if err := msgObj.Validate(); err != nil {
+				return error(err)
+			}
+
+			switch msgObj.Type {
+			case protocol.TypeChatAck:
+				continue
+			case protocol.TypeChat:
+				return msgReceived(fmt.Sprintf("<%s> %s", msgObj.From, msgObj.Body))
+			case protocol.TypeDM:
+				return msgReceived(fmt.Sprintf("[DM from %s] %s", msgObj.From, msgObj.Body))
+			case protocol.TypeDMAck:
+				return msgReceived(fmt.Sprintf("* %s", msgObj.Body))
+			case protocol.TypeNickAck:
+				return msgReceived(fmt.Sprintf("* you are now known as %s", msgObj.Body))
+			case protocol.TypeListAck:
+				return msgReceived(fmt.Sprintf("* online: %s", strings.ReplaceAll(msgObj.Body, ",", ", ")))
+			case protocol.ErrorMessage:
+				return msgReceived(fmt.Sprintf("* error: %s", msgObj.Body))
+			default:
+				return msgReceived(fmt.Sprintf("* unhandled message type: %s", msgObj.Type))
+			}
+		}
+	}
+}
+
+// messageWriter: does versioning, encoding, and writing of the message object
+func messageWriter(m *protocol.Message) error {
+	m.Version = protocol.Version
+	data, err := protocol.Encode(m)
+	if err != nil {
+		return err
+	}
+	if _, err := connWriter.WriteString(string(data) + "\n"); err != nil {
+		return err
+	}
+	return connWriter.Flush()
+}
+
+// joinHandler: performs the initial join handshake with the server
 func joinHandler() error {
-	// join request object
-	joinObj := protocol.Message{
+	joinReq := &protocol.Message{
 		Type: protocol.TypeJoinReq,
 		From: "client",
-		To:   "server",
+		To:   protocol.Server,
+	}
+	if err := messageWriter(joinReq); err != nil {
+		return fmt.Errorf("failed to request join: %w", err)
 	}
 
-	// request to join
-	err := messageWriter(&joinObj)
+	line, err := connReader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("failed to read join ack: %w", err)
+	}
+
+	msgObj, err := protocol.Decode([]byte(line))
 	if err != nil {
 		return err
 	}
-
-	msg, err := connReader.ReadString('\n')
-	if err != nil {
-		return err
+	if msgObj.Type == protocol.TypeJoinAck {
+		myId = msgObj.Body
 	}
-
-	err = messageHandler(&msg)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// initialSetup: does all the initial setup, like searver search, resource allocation etc...
-func initialSetup() error {
-	// server search
-	conn, err := net.Dial("tcp", "127.0.0.1:9000")
-	if err != nil {
-		return err
-	}
-
-	// resource allocation
-	connReader = bufio.NewReader(conn)
-	connWriter = bufio.NewWriter(conn)
-	stdinReader = bufio.NewReader(os.Stdin)
-
-	// request to join
-	err = joinHandler()
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
 func main() {
-	// initial setup
-	err := initialSetup()
+	conn, err := net.Dial("tcp", "127.0.0.1:9000")
 	if err != nil {
-		fmt.Println("initial setup error, ", err)
-		// TODO: do the gracefull shutdown if error in initial setup
+		fmt.Println("client: failed to connect:", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	connReader = bufio.NewReader(conn)
+	connWriter = bufio.NewWriter(conn)
+
+	if err := joinHandler(); err != nil {
+		fmt.Println("client: handshake failed:", err)
+		os.Exit(1)
 	}
 
-	// TODO: you need to close `conn` after the exit
-	// TODO: customize the errors for each types
-
-	go connectionHandler()
-
-	// persistant chat input
-	for {
-		fmt.Print("> ")
-		msg, err := stdinReader.ReadString('\n')
-		if err != nil {
-			fmt.Println("stdin read error", err)
-			return
-		}
-		msg = strings.TrimSuffix(msg, "\n")
-
-		msgObj := protocol.Message{
-			Type: protocol.TypeChat,
-			From: myId,
-			To:   "server",
-			Body: msg,
-		}
-
-		err = messageWriter(&msgObj)
-		if err != nil {
-			fmt.Println("error writing error", err)
-			return
-		}
+	p := tea.NewProgram(initialModel(conn), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
 	}
 }
